@@ -28,6 +28,7 @@ tabwriter = { version = "1", features = ["ansi_formatting"] }
 termcolor = "1"
 unicode-width = "0.1"
 walkdir = "2.2.5"
+indexmap = "1.7.0"
 
 [dependencies.clap]
 version = "2.32.0"

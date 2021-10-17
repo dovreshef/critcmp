@@ -4,6 +4,7 @@ use std::io::{self, Write};
 use std::process;
 use std::result;
 
+use app::DisplayConfig;
 use regex::Regex;
 
 use crate::app::Args;
@@ -53,31 +54,26 @@ fn try_main() -> Result<()> {
     }
 
     let filter = args.filter()?;
+    let config = args.display_config();
     let mut comps = match args.group()? {
-        None => group_by_baseline(&benchmarks, filter.as_ref()),
-        Some(re) => group_by_regex(&benchmarks, &re, filter.as_ref()),
+        None => group_by_baseline(&benchmarks, filter.as_ref(), config),
+        Some(re) => group_by_regex(&benchmarks, &re, filter.as_ref(), config),
     };
     if let Some(threshold) = args.threshold()? {
-        comps.retain(|comp| comp.biggest_difference() > threshold);
+        comps.drop_under(threshold);
     }
     if comps.is_empty() {
         fail!("no benchmark comparisons to show");
     }
 
-    let mut wtr = args.stdout();
-    if args.list() {
-        output::rows(&mut wtr, &comps)?;
-    } else {
-        output::columns(&mut wtr, &comps)?;
-    }
-    wtr.flush()?;
-    Ok(())
+    comps.write(args.stdout())
 }
 
 fn group_by_baseline(
     benchmarks: &Benchmarks,
     filter: Option<&Regex>,
-) -> Vec<output::Comparison> {
+    print_config: DisplayConfig,
+) -> output::Comparisons {
     let mut byname: BTreeMap<String, Vec<output::Benchmark>> = BTreeMap::new();
     for base_benchmarks in benchmarks.by_baseline.values() {
         for (name, benchmark) in base_benchmarks.benchmarks.iter() {
@@ -92,17 +88,19 @@ fn group_by_baseline(
                 .push(output_benchmark);
         }
     }
-    byname
+    let comps = byname
         .into_iter()
         .map(|(name, benchmarks)| output::Comparison::new(&name, benchmarks))
-        .collect()
+        .collect();
+    output::Comparisons::new(comps, print_config)
 }
 
 fn group_by_regex(
     benchmarks: &Benchmarks,
     group_by: &Regex,
     filter: Option<&Regex>,
-) -> Vec<output::Comparison> {
+    print_config: DisplayConfig,
+) -> output::Comparisons {
     let mut byname: BTreeMap<String, Vec<output::Benchmark>> = BTreeMap::new();
     for base_benchmarks in benchmarks.by_baseline.values() {
         for (name, benchmark) in base_benchmarks.benchmarks.iter() {
@@ -118,10 +116,11 @@ fn group_by_regex(
             byname.entry(cmp).or_insert(vec![]).push(output_benchmark);
         }
     }
-    byname
+    let comps = byname
         .into_iter()
         .map(|(name, benchmarks)| output::Comparison::new(&name, benchmarks))
-        .collect()
+        .collect();
+    output::Comparisons::new(comps, print_config)
 }
 
 fn benchmark_names(

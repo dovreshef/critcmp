@@ -1,18 +1,18 @@
+use indexmap::IndexMap;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json as json;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io;
 use std::path::Path;
-
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-use serde_json as json;
 use walkdir::WalkDir;
 
 use crate::Result;
 
 #[derive(Clone, Debug, Default)]
 pub struct Benchmarks {
-    pub by_baseline: BTreeMap<String, BaseBenchmarks>,
+    pub by_baseline: IndexMap<String, BaseBenchmarks>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

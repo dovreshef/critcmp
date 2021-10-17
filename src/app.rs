@@ -1,9 +1,12 @@
-use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
-use clap::{crate_authors, crate_version, App, AppSettings, Arg, ArgMatches};
+use clap::{
+    arg_enum, crate_authors, crate_version, App, AppSettings, Arg, ArgMatches,
+};
 use grep_cli as cli;
 use regex::Regex;
 use tabwriter::TabWriter;
@@ -93,6 +96,42 @@ Project home page: https://github.com/BurntSushi/critcmp
 Criterion home page: https://github.com/japaric/criterion.rs";
 
 #[derive(Clone, Debug)]
+pub struct DisplayConfig {
+    /// Rank format.
+    pub rank: RankingConfig,
+    /// Value format
+    pub value_format: ValueFormat,
+    /// Whether to show each benchmark comparison as a list.
+    pub list: bool,
+}
+
+arg_enum! {
+    /// Ranking format.
+    /// `Benchmark` shows the best result per benchmark (compared to
+    /// other baselines) as 1.00 and the other baselines result
+    /// as a multiple of that.
+    /// `Baseline` works per baseline, where the first baseline is
+    /// considered to be 1.00 and the other baselines are compared to it
+    #[derive(Clone, PartialEq, Debug)]
+    pub enum RankingConfig {
+        Benchmark,
+        Baseline,
+    }
+}
+
+arg_enum! {
+    /// value format.
+    /// `Percent` shows the perf value as a percentage where 100%
+    /// is the base.
+    /// `Real` shows the perf value as a floating point number.
+    #[derive(Clone, PartialEq, Debug)]
+    pub enum ValueFormat {
+        Percent,
+        Real,
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Args(ArgMatches<'static>);
 
 impl Args {
@@ -105,17 +144,17 @@ impl Args {
         // baseline name is given and is not a file path, then it is added to
         // our whitelist of baselines.
         let mut from_cli: Vec<BaseBenchmarks> = vec![];
-        let mut whitelist = BTreeSet::new();
+        let mut whitelist = Vec::new();
         if let Some(args) = self.0.values_of_os("args") {
             for arg in args {
                 let p = Path::new(arg);
                 if p.is_file() {
                     let baseb = BaseBenchmarks::from_path(p)
                         .map_err(|err| format!("{}: {}", p.display(), err))?;
-                    whitelist.insert(baseb.name.clone());
+                    whitelist.push(baseb.name.clone());
                     from_cli.push(baseb);
                 } else {
-                    whitelist.insert(arg.to_string_lossy().into_owned());
+                    whitelist.push(arg.to_string_lossy().into_owned());
                 }
             }
         }
@@ -142,11 +181,22 @@ impl Args {
         }
 
         let mut data = Benchmarks::default();
-        for basebench in from_crit.into_iter().chain(from_cli) {
-            if !whitelist.is_empty() && !whitelist.contains(&basebench.name) {
-                continue;
+        // work hard to keep cmdline insertion order
+        let mut all: HashMap<_, _> = from_crit
+            .into_iter()
+            .chain(from_cli)
+            .map(|bb| (bb.name.clone(), bb))
+            .collect();
+        if whitelist.is_empty() {
+            for (name, basebench) in all.into_iter() {
+                data.by_baseline.insert(name, basebench);
             }
-            data.by_baseline.insert(basebench.name.clone(), basebench);
+        } else {
+            for name in &whitelist {
+                if let Some(basebench) = all.remove(name) {
+                    data.by_baseline.insert(name.clone(), basebench);
+                }
+            }
         }
         Ok(data)
     }
@@ -190,10 +240,6 @@ impl Args {
         self.0.is_present("baselines")
     }
 
-    pub fn list(&self) -> bool {
-        self.0.is_present("list")
-    }
-
     pub fn export(&self) -> Option<String> {
         self.0.value_of_lossy("export").map(|v| v.into_owned())
     }
@@ -221,6 +267,22 @@ impl Args {
         } else {
             Box::new(termcolor::NoColor::new(TabWriter::new(io::stdout())))
         }
+    }
+
+    pub fn display_config(&self) -> DisplayConfig {
+        // It cannot fail since we supply a default and list all possible options
+        let rank = self
+            .0
+            .value_of("rank")
+            .and_then(|val| RankingConfig::from_str(val).ok())
+            .unwrap();
+        let value_format = self
+            .0
+            .value_of("val")
+            .and_then(|val| ValueFormat::from_str(val).ok())
+            .unwrap();
+        let list = self.0.is_present("list");
+        DisplayConfig { rank, value_format, list }
     }
 
     fn target_dir(&self) -> Result<PathBuf> {
@@ -285,6 +347,29 @@ fn app() -> App<'static, 'static> {
             .takes_value(true)
             .help("Filter benchmarks by a regex. Benchmark names are given to \
                    this regex. Matches are shown while non-matches are not."))
+        .arg(Arg::with_name("rank")
+            .long("rank")
+            .short("r")
+            .possible_values(&RankingConfig::variants())
+            .case_insensitive(true)
+            .takes_value(true)
+            .default_value("baseline")
+            .help("Ranking format. `benchmark` uses the best result per \
+                   benchmark (compared to other baselines) as 1.00 \
+                   and the other baselines result as a multiple of that. \
+                   `baseline` works per baseline, where the first \
+                   baseline is considered to be 1.00 and the other baselines \
+                   are compared to it."))
+        .arg(Arg::with_name("val")
+            .long("val")
+            .short("v")
+            .possible_values(&ValueFormat::variants())
+            .case_insensitive(true)
+            .takes_value(true)
+            .default_value("percent")
+            .help("Value format. `percent` shows the value as a percentage \
+                   of the base comparison. `real` shows the value as a real \
+                   number where the base is 1.00."))
         .arg(Arg::with_name("group")
             .long("group")
             .short("g")
